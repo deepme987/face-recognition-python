@@ -1,4 +1,5 @@
 # Custom files
+Models/FaceDetection/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

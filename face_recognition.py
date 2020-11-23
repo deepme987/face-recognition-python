@@ -1,7 +1,8 @@
 
-import cv2
-import numpy as np
 import os
+import cv2
+import argparse
+import numpy as np
 
 import _face_detection as ftk
 
@@ -16,22 +17,21 @@ class FaceDetection:
 
     @staticmethod
     def load_models():
-        print("Loading Models")
-        if not FaceDetection.v:
-            FaceDetection.v = FaceDetection.load_model()
-
         if not FaceDetection.net:
             FaceDetection.net = FaceDetection.load_opencv()
 
+        if not FaceDetection.v:
+            FaceDetection.v = FaceDetection.load_face_detection()
+        
     @staticmethod
     def load_opencv():
         model_path = "./Models/OpenCV/opencv_face_detector_uint8.pb"
-        model_weights = "./Models/OpenCV/opencv_face_detector.pbtxt"
-        net = cv2.dnn.readNetFromTensorflow(model_path, model_weights)
+        model_pbtxt = "./Models/OpenCV/opencv_face_detector.pbtxt"
+        net = cv2.dnn.readNetFromTensorflow(model_path, model_pbtxt)
         return net
 
     @staticmethod
-    def load_model():
+    def load_face_detection():
         v = ftk.Verification()
         v.load_model("./Models/FaceDetection/")
         v.initial_input_output_tensors()
@@ -44,7 +44,7 @@ class FaceDetection:
         return diff < FaceDetection.verification_threshold, diff
 
     @staticmethod
-    def detect_faces(image, display_images=False):
+    def detect_faces(image, display_images=False): # Make display_image to True to manually debug if you run into errors
         height, width, channels = image.shape
 
         blob = cv2.dnn.blobFromImage(image, 1.0, (300, 300), [104, 117, 123], False, False)
@@ -63,28 +63,31 @@ class FaceDetection:
                 faces.append([x1, y1, x2 - x1, y2 - y1])
 
                 if display_images:
-                    cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    cv2.rectangle(image, (x1, y1), (x2, y2), (255, 0, 0), 3)
     
         if display_images:
-            print(faces)
-            cv2.imshow("Face", cv2.resize(image, (300, 300)))
+            print("Face co-ordinates: ", faces)
+            cv2.imshow("Training Face", cv2.resize(image, (300, 300)))
             cv2.waitKey(0)
         return faces
 
     @staticmethod
-    def load_face_embeddings(image_dir="faces/"):
+    def load_face_embeddings(image_dir):
 
         embeddings = {}
         for file in os.listdir(image_dir):
             img_path = image_dir + file
-            image = cv2.imread(img_path)
-            faces = FaceDetection.detect_faces(image)
-            if len(faces) == 1:
-                x, y, w, h = faces[0]
-                image = image[y:y + h, x:x + w]
-                embeddings[file.split(".")[0]] = FaceDetection.v.img_to_encoding(cv2.resize(image, (160, 160)), FaceDetection.image_size)
-            else:
-                print(f"Found more than 1 face in \"{file}\", skipping embeddings for the image.")
+            try:
+                image = cv2.imread(img_path)
+                faces = FaceDetection.detect_faces(image)
+                if len(faces) == 1:
+                    x, y, w, h = faces[0]
+                    image = image[y:y + h, x:x + w]
+                    embeddings[file.split(".")[0]] = FaceDetection.v.img_to_encoding(cv2.resize(image, (160, 160)), FaceDetection.image_size)
+                else:
+                    print(f"Found more than 1 face in \"{file}\", skipping embeddings for the image.")
+            except Exception:
+                print(f"Unable to read file: {file}")
         return embeddings
 
     @staticmethod
@@ -112,28 +115,34 @@ class FaceDetection:
 
                 if display_image_with_detections:
                     cv2.rectangle(image, (x, y), (x + w, y + h), (255, 0, 0), 2)
-                    cv2.putText(image, detected[0], (x, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                    cv2.putText(image, detected[0], (x, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
 
         if display_image_with_detections:
-            cv2.imshow("Detected", image)
+            cv2.imshow("Detected", cv2.resize(image, (300, 300)))
 
         return detections
 
 
-def face_recognition(image_or_video_path=None, display_image=False):
+def face_recognition(image_or_video_path=None, display_image=False, face_dir="faces/"):
     FaceDetection.load_models()
-    embeddings = FaceDetection.load_face_embeddings()
+    embeddings = FaceDetection.load_face_embeddings(face_dir)
+    waitkey_variable = 1
+    image_flip = False
 
     if image_or_video_path:
         print("Using path: ", image_or_video_path)
         cap = cv2.VideoCapture(image_or_video_path)
+        if int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) == 1:
+            waitkey_variable = 0
     else:
         print("Capturing from webcam")
+        image_flip = True
         cap = cv2.VideoCapture(0)
     
     while 1:
         ret, image = cap.read()
-        image = cv2.flip(image, 1)
+        if image_flip:
+	        image = cv2.flip(image, 1)
 
         if not ret:
             print("Finished detection")
@@ -141,12 +150,20 @@ def face_recognition(image_or_video_path=None, display_image=False):
 
         print(FaceDetection.fetch_detections(image, embeddings, display_image))
 
-        key = cv2.waitKey(1)       # Use cv2.waitKey(0) for image
+        key = cv2.waitKey(waitkey_variable)
         if key & 0xFF == ord("q"):
             break
 
     cap.release()
     cv2.destroyAllWindows()
 
+
 if __name__ == '__main__':
-    face_recognition(display_image=True)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', type=str, default=None, help='Path to input file')
+    parser.add_argument("--display-image", action="store_true", help="Display Detected Image")
+    parser.add_argument('--faces-dir', type=str, default="faces/", help='Path to faces dir')
+    args = parser.parse_args()
+
+    face_recognition(args.input, args.display_image, args.faces_dir)
